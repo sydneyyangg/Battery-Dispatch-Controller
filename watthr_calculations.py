@@ -4,7 +4,15 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 
+import numpy as np
+
+import requests
+
 from datetime import datetime, date, time
+from http.client import IncompleteRead
+from time import sleep
+
+from urllib3.exceptions import ProtocolError
 
 
 #1 Define coordinates for the locations of interest
@@ -40,21 +48,63 @@ inverter = sapm_inverters['ABB__MICRO_0_25_I_OUTD_US_208__208V_']
 
 temperature_model_parameters = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_glass']
 
+
+def load_weather(latitude, longitude, altitude, start, end, variables, api_key, retries=3):
+    isera5 = True
+
+    for attempt in range(1, retries + 1):
+        try:
+            weather = pvlib.iotools.get_era5(latitude, longitude, start, end, variables, api_key)[0].copy()
+            weather['pressure'] = pvlib.atmosphere.alt2pres(altitude)
+            weather['wind_speed'] = np.hypot(
+                weather['u10'],
+                weather['v10'],
+            )
+            weather['dhi'] = weather['ghi'] - weather['fdir']
+            print(f"Era5 used: {isera5}")
+            return weather
+        except (
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ConnectionError,
+            ProtocolError,
+            IncompleteRead,
+        ) as error:
+            if attempt == retries:
+                break
+            sleep(2 ** (attempt - 1))
+
+    isera5 = False
+    weather, meta = pvlib.iotools.get_pvgis_tmy(latitude, longitude)
+    weather = weather.copy()
+    weather['pressure'] = pvlib.atmosphere.alt2pres(altitude)
+    if 'wind_speed' not in weather.columns:
+        weather['wind_speed'] = 0.0
+
+    if 'dni' not in weather.columns or 'dhi' not in weather.columns:
+        raise RuntimeError('PVGIS fallback did not return DNI and DHI columns.')
+
+    print(f"Era5 used: {isera5}")
+
+    return weather
+
 # 3. Get weather data for each location using a database
 
 tmys = []
 
 start = datetime(2020, 1, 1)
 end = datetime(2020, 12, 31)
+variables = ['ghi', 'total_sky_direct_solar_radiation_at_surface', 'temp_air', '10m_u_component_of_wind', '10m_v_component_of_wind']
+api_key = ''
 
 for location in coordinates:
     latitude, longitude, name, altitude, timezone = location
-    weather = pvlib.iotools.get_pvgis_tmy(latitude, longitude)[0]
-    #weather = pvlib.iotools.get_nasa_power(latitude, longitude, start, end)
+    #weather = pvlib.iotools.get_pvgis_tmy(latitude, longitude)[0]
+    weather = load_weather(latitude, longitude, altitude, start, end, variables, api_key)
     # these return a dataframe 
     # gives an hour-by-hour year of representative irradiance, temperature, wind, and pressure data for that location.
 
-    weather.index.name = "utc_time"
+    #weather.index.name = "utc_time"
+    #weather.index = "utc_time"
     tmys.append(weather)
 
 system = {'module': module, 'inverter': inverter,
@@ -66,6 +116,7 @@ energies = {}
 for location, weather in zip(coordinates, tmys):
     latitude, longitude, name, altitude, timezone = location
     system['surface_tilt'] = latitude
+
     # Computes solar position (sun's zenith/azimuth angle) for every timestamp.
     solpos = pvlib.solarposition.get_solarposition(
         time=weather.index,
@@ -75,6 +126,9 @@ for location, weather in zip(coordinates, tmys):
         temperature=weather["temp_air"],
         pressure=weather["pressure"],
     )
+
+    if 'dni' not in weather.columns:
+        weather['dni'] = (weather['ghi'] - weather['dhi']) / np.cos(np.radians(solpos['apparent_zenith']))
 
     # Computes extraterrestrial irradiance, airmass, 
     # and angle-of-incidence (AOI) of sunlight on the panel (tilted at an angle 
@@ -90,7 +144,6 @@ for location, weather in zip(coordinates, tmys):
         solpos["azimuth"],
     )
 
-    
     # Converts DNI/GHI/DHI weather components into plane-of-array irradiance 
     # using the Hay-Davies transposition model.
     total_irradiance = pvlib.irradiance.get_total_irradiance(
@@ -104,6 +157,7 @@ for location, weather in zip(coordinates, tmys):
         dni_extra=dni_extra,
         model='haydavies',
     )
+
     # Estimates module cell temperature from irradiance, air temp, and wind speed (Sandia thermal model).
     cell_temperature = pvlib.temperature.sapm_cell(
         total_irradiance['poa_global'],
