@@ -22,18 +22,11 @@ from urllib3.exceptions import ProtocolError
 
 # # latitude, longitude, name, altitude, timezone
 # # approx altitude, region is mountainous but double check land access
-# coordinates = [
-#     (14.8, 120.3, 'Subic', 350, 'Pht/GMT+8'),
-#     (35.1, -106.6, 'Albuquerque', 1500, 'Etc/GMT+7'),
-# ]
 
 
 coordinates = [
-    (32.2, -111.0, 'Tucson', 700, 'Etc/GMT+7'),
-    (35.1, -106.6, 'Albuquerque', 1500, 'Etc/GMT+7'),
-    (37.8, -122.4, 'San Francisco', 10, 'Etc/GMT+8'),
-    (52.5, 13.4, 'Berlin', 34, 'Etc/GMT-1'),
     (14.8, 120.3, 'Subic', 350, 'Etc/GMT+8'),
+    (7.1, 125.6, 'Davao', 15, 'Etc/GMT+8'),
 ]
 
 # 2. Load equipment models
@@ -60,7 +53,8 @@ def load_weather(latitude, longitude, altitude, start, end, variables, api_key, 
                 weather['u10'],
                 weather['v10'],
             )
-            weather['dhi'] = weather['ghi'] - weather['fdir']
+            weather['fdir_wm2'] = weather['fdir'] / 3600
+            weather['dhi'] = (weather['ghi'] - weather['fdir_wm2']).clip(lower=0)
             print(f"Era5 used: {isera5}")
             return weather
         except (
@@ -72,6 +66,7 @@ def load_weather(latitude, longitude, altitude, start, end, variables, api_key, 
             if attempt == retries:
                 break
             sleep(2 ** (attempt - 1))
+            print(f"Attempt {attempt} failed with error: {error}. Retrying...")
 
     isera5 = False
     weather, meta = pvlib.iotools.get_pvgis_tmy(latitude, longitude)
@@ -98,7 +93,6 @@ api_key = ''
 
 for location in coordinates:
     latitude, longitude, name, altitude, timezone = location
-    #weather = pvlib.iotools.get_pvgis_tmy(latitude, longitude)[0]
     weather = load_weather(latitude, longitude, altitude, start, end, variables, api_key)
     # these return a dataframe 
     # gives an hour-by-hour year of representative irradiance, temperature, wind, and pressure data for that location.
@@ -116,6 +110,14 @@ energies = {}
 for location, weather in zip(coordinates, tmys):
     latitude, longitude, name, altitude, timezone = location
     system['surface_tilt'] = latitude
+
+    # print(f"\n{name} diagnostics")
+    # diagnostic_columns = ['ghi', 'temp_air', 'wind_speed']
+    # if 'fdir' in weather.columns:
+    #     diagnostic_columns.append('fdir')
+    # if 'fdir_wm2' in weather.columns:
+    #     diagnostic_columns.append('fdir_wm2')
+    # print(weather[diagnostic_columns].describe())
 
     # Computes solar position (sun's zenith/azimuth angle) for every timestamp.
     solpos = pvlib.solarposition.get_solarposition(
@@ -158,6 +160,8 @@ for location, weather in zip(coordinates, tmys):
         model='haydavies',
     )
 
+    print(total_irradiance[['poa_global', 'poa_direct', 'poa_diffuse']].describe())
+
     # Estimates module cell temperature from irradiance, air temp, and wind speed (Sandia thermal model).
     cell_temperature = pvlib.temperature.sapm_cell(
         total_irradiance['poa_global'],
@@ -174,9 +178,12 @@ for location, weather in zip(coordinates, tmys):
         aoi,
         module,
     )
+    print(effective_irradiance.describe())
     #Runs the Sandia PV array performance model (sapm) to get DC output (voltage, power) at each timestep.
     dc = pvlib.pvsystem.sapm(effective_irradiance, cell_temperature, module)
     ac = pvlib.inverter.sandia(dc['v_mp'], dc['p_mp'], inverter)
+    print(dc[['p_mp', 'v_mp']].describe())
+    print(ac.describe())
     # Sums the AC power over the whole year to get total annual energy yield for that location.
     annual_energy = ac.sum()
     energies[name] = annual_energy
