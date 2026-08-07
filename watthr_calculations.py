@@ -25,7 +25,7 @@ from urllib3.exceptions import ProtocolError
 
 
 coordinates = [
-    (14.8, 120.3, 'Subic', 350, 'Etc/GMT+8'),
+    (14.8, 120.1, 'Subic', 350, 'Etc/GMT+8'),
     (7.1, 125.6, 'Davao', 15, 'Etc/GMT+8'),
 ]
 
@@ -97,8 +97,7 @@ for location in coordinates:
     # these return a dataframe 
     # gives an hour-by-hour year of representative irradiance, temperature, wind, and pressure data for that location.
 
-    #weather.index.name = "utc_time"
-    #weather.index = "utc_time"
+    weather.index.name = "utc_time"
     tmys.append(weather)
 
 system = {'module': module, 'inverter': inverter,
