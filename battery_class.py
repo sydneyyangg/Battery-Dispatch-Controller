@@ -57,7 +57,18 @@ class Battery:
         self.last_fault = None
 
     def update_SOC(self, current, dt):
-        
+        # (q0 + q) / qmax
+        # or soc0 + q/qmax
+        # q is the charge in mah. this is I*dt.
+        self.SOC += (current * dt) / self.capacity
+        # limit soc
+        self.SOC = max(self.SOC_limit_l, min(self.SOC, self.SOC_limit_h))
+        if self.SOC == self.SOC_limit_l:
+            self.set_state(BatteryState.CHARGING)
+            self.last_fault = "SOC below limit"
+        if self.SOC == self.SOC_limit_h:
+            self.set_state(BatteryState.DISCHARGING)
+            self.last_fault = "SOC above limit"
 
     def update_temp(self, temp):
         self.temp = temp
@@ -73,6 +84,10 @@ class Battery:
         self.state = BatteryState.IDLE
 
     def request_power(self, power_w, dt, temp=None):
+        # must be within temperature limits
+        # not overcharging, ie not above SOC limit
+        # no faulting
+        # requesting a certain wattage, can it provide that wattage? if not, return the max it can provide.
         
 
     def get_status(self):
