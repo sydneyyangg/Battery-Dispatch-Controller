@@ -56,12 +56,8 @@ class Battery:
             self.SOC -= (req_w * dt) / 1000 / self.capacity * self.efficiency
 
         self.SOC = max(self.SOC_limit_l, min(self.SOC, self.SOC_limit_h))
-        if self.SOC == self.SOC_limit_l:
-            self.set_state(BatteryState.FAULT)
-            self.last_fault = "SOC below limit"
-        if self.SOC == self.SOC_limit_h:
-            self.set_state(BatteryState.FAULT)
-            self.last_fault = "SOC above limit"
+
+    # returns watts
 
     def available_charge_power(self):
         """Max power battery can accept right now, given SoC headroom and C-rate."""

@@ -50,9 +50,6 @@ def complementarity_check(pv_series, wind_series):
     return corr
 
 
-# ---------------------------------------------------------------------------
-# 2. Battery state machine (same one from before, imported here for reuse)
-# ---------------------------------------------------------------------------
 def battery_state_machine(total_hourly_wh, load_w, capacity_wh, soc0_wh=None,
                            charge_eff=0.95, discharge_eff=0.95):
     """
@@ -67,13 +64,14 @@ def battery_state_machine(total_hourly_wh, load_w, capacity_wh, soc0_wh=None,
     unmet_hours = 0
     for gen in total_hourly_wh:
         net = gen - load_w  # Wh for a 1-hour step. generated power - used power. 
-        # if the net is positive, battery produces enough power
+        # if the net is positive, battery produces enough power, so update soc
         if net >= 0:
             soc = min(capacity_wh, soc + net * charge_eff)
-        else:
-            deliverable = min(-net, soc * discharge_eff)
-            soc = max(0.0, soc - deliverable / discharge_eff)
-            unmet = max(0.0, -net - deliverable)
+        else: # net negative, battery needs to discharge to meet load.
+            deliverable = min(-net, soc * discharge_eff) # either the net, or the rest of the battery
+            deliverable = deliverable * discharge_eff  # Convert to power (W)
+            soc = max(0.0, soc - deliverable / discharge_eff) # remaining battery %
+            unmet = max(0.0, -net - deliverable) # energy unfulfilled
             if unmet > 0:
                 unmet_total += unmet
                 unmet_hours += 1
@@ -83,6 +81,7 @@ def battery_state_machine(total_hourly_wh, load_w, capacity_wh, soc0_wh=None,
 
 # ---------------------------------------------------------------------------
 # 3. Required battery size for a target reliability, via bisection
+# CHANGE target lpsp
 # ---------------------------------------------------------------------------
 def min_battery_for_target_lpsp(total_hourly_wh, load_w, target_lpsp=0.02,
                                  lo_wh=0.0, hi_wh=None, tol_wh=500.0):
@@ -97,7 +96,7 @@ def min_battery_for_target_lpsp(total_hourly_wh, load_w, target_lpsp=0.02,
     size) instead of their graphical/tabulated approach.
     """
     if hi_wh is None:
-        hi_wh = load_w * 24 * 14  # generous upper bound: 2 weeks of autonomy
+        hi_wh = load_w * 24 * 14  # CHANGE: generous upper bound: 2 weeks of autonomy
     while hi_wh - lo_wh > tol_wh:
         mid = (lo_wh + hi_wh) / 2
         lpsp, _ = battery_state_machine(total_hourly_wh, load_w, mid)
@@ -110,6 +109,7 @@ def min_battery_for_target_lpsp(total_hourly_wh, load_w, target_lpsp=0.02,
 
 # ---------------------------------------------------------------------------
 # 4. Grid search over capacity mixes
+# CHANGE:  can change the ranges and costs here 
 # ---------------------------------------------------------------------------
 def grid_search_mix(pv_series, wind_series, load_w, target_lpsp=0.02,
                      n_panels_range=range(0, 21, 2),
@@ -157,34 +157,7 @@ def grid_search_mix(pv_series, wind_series, load_w, target_lpsp=0.02,
     df = pd.DataFrame(records).sort_values("estimated_capex").reset_index(drop=True)
     return df
 
-
-# ---------------------------------------------------------------------------
-# Synthetic per-unit series for a self-contained demo (swap for your real
-# pv_series / wind_series -- one column of hourly Wh for a single panel /
-# single turbine over a full year).
-# ---------------------------------------------------------------------------
-def _make_synthetic_series(n_hours=8784, seed=0, anti_correlated=True):
-    rng = np.random.default_rng(seed)
-    idx = pd.date_range("2020-01-01", periods=n_hours, freq="h", tz="UTC")
-    hour = idx.hour.values
-    day = idx.dayofyear.values
-
-    solar_shape = np.clip(np.sin((hour - 6) / 12 * np.pi), 0, None)
-    cloud = rng.uniform(0.4, 1.0, n_hours)
-    pv = pd.Series(solar_shape * 220 * cloud, index=idx)  # ~220W panel
-
-    base_wind = 0.15 + 0.05 * np.sin(day / 365 * 2 * np.pi)
-    if anti_correlated:
-        # wind tends to fill in when cloud is heavy (crude but illustrative)
-        wind_factor = (1 - cloud) * 0.6 + rng.uniform(0.1, 0.4, n_hours)
-    else:
-        wind_factor = rng.uniform(0.1, 0.5, n_hours)
-    wind = pd.Series(np.clip(base_wind + wind_factor, 0, 1) * 4200 * 1000 / 8784 * 8,
-                      index=idx)  # crude per-turbine shape, illustrative only
-
-    return pv, wind
-
-
+#CHANGE: model of solar and turbine
 if __name__ == "__main__":
     pv_series = solar_calcs.run_pv_model(show_plot=False)  # one panel's hourly output, in Wh
     weather = wind_calcs.get_weather_data()
@@ -196,10 +169,9 @@ if __name__ == "__main__":
         raise RuntimeError("Failed to build the PV or wind hourly series.")
 
     complementarity_check(pv_series, wind_series)
-
-    # example: a small load, e.g. a monitoring station or small facility
-    load_w = 400000 #  
-
+# CHANGE: load per hour, in w. need fluctuating load w for realism
+    load_w = 400000 
+# CHANGE: range
     results = grid_search_mix(
         pv_series, wind_series, load_w,
         n_panels_range=range(0, 50, 4),
