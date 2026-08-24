@@ -2,12 +2,12 @@
 from enum import Enum
 
 
-class BatteryState(str, Enum):
+class BatteryStates(str, Enum):
     IDLE = "idle"
     CHARGING = "charging"
     DISCHARGING = "discharging"
-    FAULT = "fault"
-
+    FULL = "full"
+    EMPTY = "empty"
 
 class Battery:
     crate: float
@@ -19,7 +19,7 @@ class Battery:
     temp_limit_l: float
     temp_limit_h: float
     current_power: float
-    state: BatteryState
+    state: BatteryStates
     last_fault: str | None
 
     def __init__(
@@ -43,16 +43,16 @@ class Battery:
         self.efficiency = efficiency
         self.crate = 0.0
         self.current_power = 0.0
-        self.state = BatteryState.IDLE
+        self.state = BatteryStates.IDLE
         self.last_fault = None
 
     def update_SOC(self, req_w, dt):
         # (q0 + q) / qmax ( capacity )
         # or soc0 + q/qmax
         # irl its Kalman Filter Method
-        if self.state == BatteryState.CHARGING:
+        if self.state == BatteryStates.CHARGING:
             self.SOC += (req_w * dt) / 1000 / self.capacity * self.efficiency
-        elif self.state == BatteryState.DISCHARGING:
+        elif self.state == BatteryStates.DISCHARGING:
             self.SOC -= (req_w * dt) / 1000 / self.capacity * self.efficiency
 
         self.SOC = max(self.SOC_limit_l, min(self.SOC, self.SOC_limit_h))
@@ -72,37 +72,3 @@ class Battery:
         # headroom * capacity = max discharge in kwh
         headroom = self.SOC - self.SOC_limit_l
         return headroom * self.capacity
-
-    def charge(self, power_w, dt):
-        self.set_state(BatteryState.CHARGING)
-        actual_power = min(power_w, self.available_charge_power())
-        self.update_SOC(actual_power, dt)
-
-    def discharge(self, power_w, dt):
-        self.set_state(BatteryState.DISCHARGING)
-        actual_power = min(power_w, self.available_discharge_power())
-        self.update_SOC(-actual_power, dt)
-
-    def update_temp(self, temp):
-        self.temp = temp
-        self.temp = max(self.temp_limit_l, min(self.temp, self.temp_limit_h))
-
-    def set_state(self, new_state):
-        if self.state == BatteryState.FAULT and new_state != BatteryState.FAULT:
-            self.last_fault = None
-        self.state = new_state
-
-    def clear_fault(self):
-        self.last_fault = None
-        self.state = BatteryState.IDLE
-
-    def get_status(self):
-        return {
-            "state": self.state.value,
-            "soc": self.SOC,
-            "voltage": self.voltage,
-            "current": self.current,
-            "power_w": self.current_power,
-            "temp": self.temp,
-            "last_fault": self.last_fault,
-        }
