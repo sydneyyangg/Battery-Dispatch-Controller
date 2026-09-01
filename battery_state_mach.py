@@ -2,16 +2,20 @@ from transitions import Machine
 from battery_class import Battery, BatteryStates
 from solar_calcs import run_pv_model
 import wind_calcs
+from hybrid_optimize import to_per_mw
 
 class BatteryController(object):
     states = BatteryStates
 
-    def __init__(self, name):
-        self.battery = Battery(capacity=10, temp=25, temp_limit_l=0, temp_limit_h=40)
+    def __init__(self, name, battery_wh):
+        self.battery = Battery(capacity=battery_wh/1000, temp=25, temp_limit_l=0, temp_limit_h=40)
 
         self.name = name
         self.net_power_hr = 0
         self.current_hour = 0
+
+        mw_solar_series = 2950
+        mw_wind_series = 500
 
         transitions = [
             { 'trigger': 'needs_met', 'source': ['BatteryStates.IDLE', 'BatteryStates.CHARGING', 'BatteryStates.DISCHARGING'], 'dest': 'BatteryStates.IDLE', 'conditions': ['net_0', 'temp_in_range']},
@@ -37,14 +41,16 @@ class BatteryController(object):
         my_turbine, e126, my_turbine2 = wind_calcs.initialize_wind_turbines()
         wind_calcs.calculate_power_output(weather, my_turbine, e126, my_turbine2)
         self.wind_series = e126.power_output  # one turbine's hourly output, in Wh
-        total_wph = self.pv_series + self.wind_series
-        load = 10000  # Example load in W
+        mw_solar = to_per_mw(self.pv_series, 220)  # scale to MW
+        mw_wind = to_per_mw(self.wind_series, 4200000)  # scale to MW
+        total_wph = mw_solar * mw_solar_series + mw_wind * mw_wind_series
+        load = 500000  # Example load in W
+
         self.net_power = total_wph - load
 
         self.current_hour = 0  # Initialize the current hour
 
-# NEED TO MULT BY RESULTING PANELS AND TURBINES FOR ACCURATE WATT RATIO
-# AND REDETERMINE LOAD
+
     def get_hourly_net_and_soc(self):
         # pull entry from self.net_power based on current hour
         self.net_power_hr = self.net_power.iloc[self.current_hour]

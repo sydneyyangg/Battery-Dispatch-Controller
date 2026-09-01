@@ -21,34 +21,34 @@ import solar_calcs
 # ---------------------------------------------------------------------------
 def to_per_mw(device_series, device_nameplate_w):
     """
-    Rescale a single device's hourly output series into the hourly output
-    of a 1 MW *fleet* of that device, assuming the fleet's weather-driven
-    output ratio matches the single unit exactly 
+    Rescale a single device (wind turbine or solar panel)'s hourly output
+    series (over a year) into the hourly output of a 1 MW fleet of that device.
+    this essentially reduces the amount of calculations that have to be made,
+    searching by MW instead of by device count.  This is a simple linear scaling
 
     device_nameplate_w: the device's rated capacity in watts (e.g. a solar
         module's DC nameplate rating, or a turbine's nominal_power).
 
-    device_series / device_nameplate_w is basically an efficiency ratio, ie how much
-    of the capacity is actually being produced each hour
+    device_series / device_nameplate_w is basically an efficiency ratio for one device, ie how much
+    of the capacity is actually being produced each hour. multiply to get 1 MW
 
     """
     return device_series * (1_000_000.0 / device_nameplate_w)
 
 
 # ---------------------------------------------------------------------------
-# 1. Complementarity check -- cheap diagnostic, do this first
+# 1. Complementarity check 
 # ---------------------------------------------------------------------------
 def complementarity_check(pv_series, wind_series):
     """
-    Negative -> genuinely complementary (hybridizing pays off directly).
+    Negative -> complementary (hybridizing pays off).
     Near zero -> independent (hybridizing still reduces variance via
-      diversification, just less dramatically).
+      diversification).
     Positive -> resources tend to be high/low together (hybridizing buys
       you less; lean toward whichever resource is cheaper/more available,
       or invest more in storage instead).
     """
-    print(f"Type of pv_series: {type(pv_series)}")
-    print(f"Type of wind_series: {type(wind_series)}")
+    
     corr = pv_series.corr(wind_series)
     print(f"Hourly correlation (pv vs wind): {corr:+.3f}")
     return corr
@@ -70,7 +70,7 @@ def battery_state_machine(total_hourly_wh, load_w, capacity_wh, soc0_wh=None,
         net = gen - load_w  # Wh for a 1-hour step. generated power - used power.
         # if the net is positive, battery produces enough power, so update soc
         if net >= 0:
-            soc = min(capacity_wh, soc + net * charge_eff)
+            soc = min(capacity_wh, soc + net * charge_eff)  # soc is either increased (charging) or full
         else:  # net negative, battery needs to discharge to meet load.
             deliverable = min(-net, soc * discharge_eff)  # either the net, or the rest of the battery
             soc = max(0.0, soc - deliverable / discharge_eff)  # remaining battery %
@@ -112,9 +112,9 @@ def min_battery_for_target_lpsp(total_hourly_wh, load_w, target_lpsp=0.02,
       [lo_wh, hi_wh].
     """
     if hi_wh is None:
-        hi_wh = battery_ceiling_wh(load_w, 5)  # CHANGE: generous upper bound: 2 weeks of autonomy
+        hi_wh = battery_ceiling_wh(load_w)  # CHANGE: upper bound assumes 14 days of no wind and solar energy input
 
-    # Check feasibility first: even max battery might not be enough if
+    # Check feasibility: even max battery might not be enough if
     # generation itself is too small to ever satisfy target_lpsp.
     lpsp_at_ceiling, _ = battery_state_machine(total_hourly_wh, load_w, hi_wh)
     if lpsp_at_ceiling > target_lpsp:
@@ -157,11 +157,15 @@ def grid_search_mix(pv_per_mw, wind_per_mw, load_w, target_lpsp=0.02,
     Brute-force grid search over (mw_solar, mw_wind)
     
     """
+    # accounting for eff decrase from a farm 
     pv_farm = pv_per_mw * solar_derate
     wind_farm = wind_per_mw * wind_derate
 
     records = []
     infeasible_count = 0
+
+    #simulating all possibilities of solar and wind capacity combinations
+    # to see which hits the target and prints best lpsp and cost
     for mw_solar in mw_solar_range:
         for mw_wind in mw_wind_range:
             if mw_solar == 0 and mw_wind == 0:
